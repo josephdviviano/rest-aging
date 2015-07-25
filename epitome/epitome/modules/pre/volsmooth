@@ -1,0 +1,50 @@
+#!/bin/bash
+
+cat <<EOF
+export INPUT=`echo 'func_'${1}`
+export MASK=`echo 'anat_'${2}`
+export FWHM=`echo ${3}`
+
+EOF
+
+cat<<"EOF"
+
+echo '************************************************************************'
+echo '     Smooths data in volumetric space, obeying mask label boundaries'
+echo '   Anything labeled zero in the mask will become zeroed in the output.'
+echo ''
+echo '************************************************************************'
+
+
+#Loop through sessions, runs
+DIR_SESS=`ls -d -- ${DIR_DATA}/${DIR_EXPT}/${SUB}/${DATA_TYPE}/*/`
+for SESS in ${DIR_SESS}; do
+    DIR_RUNS=`ls -d -- ${SESS}/RUN*`
+    for RUN in ${DIR_RUNS}; do
+        NUM=`basename ${RUN} | sed 's/[^0-9]//g'`
+        
+        # resample input mask to match dimensions of first run
+        if [ ! -f ${SESS}/anat_smoothmask.nii.gz ]; then 
+            3dresample \
+                -prefix ${SESS}/anat_smoothmask.nii.gz \
+                -master ${SESS}/${INPUT}.${ID}.01.nii.gz \
+                -rmode NN \
+                -inset ${SESS}/${MASK}.nii.gz
+        fi
+
+        # resample mask to single-run space, then smooth
+        if [ ! -f ${SESS}/func_volsmooth.${ID}.${NUM}.nii.gz ]; then
+            3dBlurInMask \
+                -prefix ${SESS}/func_volsmooth.${ID}.${NUM}.nii.gz \
+                -Mmask ${SESS}/anat_smoothmask.nii.gz \
+                -FWHM ${FWHM} \
+                -input ${SESS}/${INPUT}.${ID}.${NUM}.nii.gz
+
+        fi
+    done
+done
+
+cd ${DIR_PIPE}
+
+EOF
+

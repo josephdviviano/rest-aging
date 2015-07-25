@@ -1,0 +1,903 @@
+#!/usr/bin/env python
+"""
+###############################################################################
+
+                       _  _ ___
+                      |_ |_) | _|_  _  ._ _   _ __ \/ |  
+                      |_ |  _|_ |_ (_) | | | (/_   /\ |_ 
+
+Usage:
+
+    EPItome modules            -- prints a list of all available modules, and
+                                  associated help.
+    EPItome experiments        -- returns a list of all available experiments.
+
+    EPItome check              -- returns installation paths.
+    EPItome check <experiment> -- checks directory structure for a given 
+                                  experiment.
+
+    EPItome run                -- boots up the user interface for producing
+                                  pre-processing and QC scripts.
+
+    EPItome clean              -- boots up the user interface for producing
+                                  clean-up scripts (for resetting subjects or
+                                  removing intermediate files).
+
+#######################################################################jdv2014#
+
+"""
+
+import copy
+import json
+import time
+import getpass
+import platform
+import os, sys, stat
+import epitome as epi
+
+# Shared Functions -- Called Internally
+###############################################################################
+
+def get_modules(interactive=False, moduletype='pre', used=[]):
+    """
+    Prints the available modules. Optionally prompts the user to select one.
+    If provided with a list of 'used' modules, these are stripped from the
+    output.
+    """
+
+    # retrieve settings from config.py
+    dir_data, dir_pipe, dir_afni, cores = epi.config.return_paths()
+
+    # get a sorted list of the modules
+    dir_modules = os.path.join(dir_pipe, 'epitome/modules', str(moduletype))
+
+    # try to import a list of the module types
+    try:
+        module_list = [f for f in os.listdir(dir_modules)
+                               if os.path.isfile(os.path.join(dir_modules, f))]
+    except:
+        # if the module type does not exist, throw an error
+        module_types = os.listdir(os.path.join(dir_pipe, 'epitome', 'modules'))
+        print("""You didn't give me an appropriate module type""")
+        print("""Available:\n""")
+        for m in module_types:
+            print('    ' + str(m))
+        return None
+
+    # if we get a used list, remove them from the module list
+    if used != None:
+        for u in used:
+            try:
+                module_list.remove(u)
+            except:
+                pass
+    
+    module_list.sort()
+
+    # print information to the screen
+    print('Modules found:\n')
+    for i, module in enumerate(module_list):
+        print(str(i+1) + ': ' + module)
+    print('')
+
+    # either print a helpful message, or prompt the user to select a module    
+    if interactive == False:
+        print("""Access help for each using 'EPItome <module> --help'.""")
+    else:
+        response = raw_input('module #: ')
+        
+        # attempt to retrieve the selected module
+        try:
+            selection = module_list[int(response)-1]
+        except:
+            print("""Didn't give me a valid module number! Try again.""")
+            selection = None 
+
+        # maybe there is a better way of doing this...
+        if response == 0:
+            print("""Didn't give me a valid module number! Try again.""")
+            selection = None
+
+        # if we get a valid response, append it to the used list
+        if selection != None:
+            used.append(selection)
+
+        return selection, used
+
+def get_mode(expt, interactive=False):
+    """
+    Prints the available image modalities. Optionally prompts the user to 
+    select one.
+    """
+
+    # retrieve settings from config.py
+    dir_data, dir_pipe, dir_afni, cores = epi.config.return_paths()
+
+    # get a sorted list of the experiments
+    dir_expt = os.path.join(dir_data, expt)
+    subj_list = [d for d in os.listdir(dir_expt)
+                         if os.path.isdir(os.path.join(dir_expt, d))]
+    dir_subj = os.path.join(dir_expt, subj_list[0])
+    mode_list = [d for d in os.listdir(dir_subj)
+                         if os.path.isdir(os.path.join(dir_subj, d))]
+
+    mode_list.sort()
+
+    # print information to the screen
+    print('Image modalities found:\n')
+    for i, mode in enumerate(mode_list):
+        print(str(i+1) + ': ' + mode)
+    print('')
+
+    if interactive == False:
+        print("""Wasn't that fun?""")
+    else:
+        response = raw_input('modality #:')
+
+        # attempt to retrieve the selected experiment
+        try:
+            selection = mode_list[int(response)-1]
+        except:
+            print("""Didn't give me a valid image mode number! Try again.""")
+            selection = None
+
+        # maybe there is a better way of doing this...
+        if response == 0:
+            print("""Didn't give me a valid image mode number! Try again.""")
+            selection = None
+
+        return selection
+
+def get_experiments(interactive=False):
+    """
+    Prints the available experiments. Optionally prompts the user to select
+    one.
+    """
+
+    # retrieve settings from config.py
+    dir_data, dir_pipe, dir_afni, cores = epi.config.return_paths()
+
+    # check permissions
+    if epi.utilities.has_permissions(dir_data) == False:
+        sys.exit()
+
+    # get a sorted list of the experiments
+    expt_list = [d for d in os.listdir(dir_data)
+                         if os.path.isdir(os.path.join(dir_data, d))]
+    expt_list.sort()
+    
+    print('Experiments found:\n')
+    i = 0
+    selection_list = []
+    for expt in expt_list:
+        if expt != 'FREESURFER':
+            print(str(i+1) + ': ' + expt)
+            selection_list.append(expt)
+            i = i + 1
+    print('')
+
+    if interactive == False:
+        print("""You can inspect each experiment's folder structure using""")
+        print("""'EPItome check <experiment>'.\n""")
+    else:
+        response = raw_input('experiment #:')
+
+        # attempt to retrieve the selected experiment
+        try:
+            selection = selection_list[int(response)-1]
+        except:
+            print("""Didn't give me a valid experiment number! Try again.""")
+            selection = None
+
+        # maybe there is a better way of doing this...
+        if response == 0:
+            print("""Didn't give me a valid experiment number! Try again.""")
+            selection = None
+
+        return selection
+
+# def export_modules():
+#     """
+#     Copies a set of the current modules to the user's home directory. This
+#     allows the user to modify their private version of the pipeline as they
+#     see fit.
+#     """
+
+def writer_sub(pipe_list, line, cmd, f, output, bkup):
+    # output will == None if we made a mistake
+    if output != None:
+        out_line = line + ' >> ${DIR_DATA}/${DIR_EXPT}/${SUB}/' + cmd + '\n'
+        f.write(out_line)
+        pipe_list.append(line)
+
+    # if we did make a mistake, restore the old output
+    else:
+        output = copy.copy(bkup)
+
+    return pipe_list, output
+
+def writer_exp(pipe_list, line, proc, f, output, bkup):
+    # output will == None if we made a mistake
+    if output != None:
+        out_line = line + ' >> ${DIR_DATA}/${DIR_EXPT}/' + proc + '\n'
+        f.write(out_line)
+        pipe_list.append(line)
+
+    # if we did make a mistake, restore the old output
+    else:
+        output = copy.copy(bkup)
+
+    return pipe_list, output
+
+def get_date_user():
+    """
+    Returns a eyeball-friendly timestamp, the current user's name, 
+    and a filename-friendly timestamp.
+    """
+
+    datetime = time.strftime("%Y/%m/%d -- %H:%M:%S")
+    user = getpass.getuser()
+    f_id = time.strftime("%y%m%d_%H%M%S")
+
+    return datetime, user, f_id
+
+# Command-Line helper functions
+###############################################################################
+def print_help(module):
+    
+    # retrieve settings from config.py
+    dir_data, dir_pipe, dir_afni, cores = epi.config.return_paths()
+
+    # load in the help data
+    fname = open(os.path.join(dir_pipe, 'epitome/help.json'), 'rb')
+    helpfile = json.load(fname)
+
+    # print the contents of the JSON line by line
+    print('')
+    if module != None:
+        for line in helpfile[module]:
+            print line
+    print('')
+
+def help_query():
+
+    # retrieve settings from config.py
+    dir_data, dir_pipe, dir_afni, cores = epi.config.return_paths()
+
+    # # check permissions
+    # if epi.utilities.has_permissions(
+    #                      os.path.join(dir_pipe, 'epitome/modules')) == False:
+    #     sys.exit()
+
+    # ask which module type we want to look at
+    module_types = os.listdir(os.path.join(dir_pipe, 'epitome/modules'))
+    module_types.sort()
+    print('Module types found:\n')
+    for i, module in enumerate(module_types):
+        print(str(i+1) + ': ' + module)
+
+    # prompt the user to select a module type 
+    print('\nWhich kind of module?')
+    response = raw_input('module #: ')
+    
+    # attempt to retrieve the selected module
+    try:
+        selection = module_types[int(response)-1]
+    except:
+        print("""\nYou didn't input a valid number! Default = 'pre'.""")
+        selection = 'pre'
+
+    # present the user with a list
+    print('Which module do you need help with?')
+    module = get_modules(interactive=True, moduletype=str(selection))
+
+    # print help for that module
+    print_help(module)
+
+def check_paths():
+    """
+    This ensures paths defined in config.py are actual directories, and checks
+    that the AFNI physio regression programs are configured properly..
+    """
+
+    # retrieve settings from config.py
+    dir_data, dir_pipe, dir_afni, cores = epi.config.return_paths()
+    
+    if os.path.isdir(dir_data) == False:
+        print('Data directory does not exist:' + str(dir_data))
+
+    elif os.path.isdir(dir_pipe) == False:
+        print('EPItome-XL directory does not exist:' + str(dir_pipe))
+
+    elif os.path.isdir(dir_afni) == False:
+        print('AFNI directory does not exist:' + str(dir_afni))
+    
+    elif os.path.isfile('/opt/mcretro/run_McRetroTS.sh') == False:
+        print('**********************************************')
+        print('/opt/mcretro/run_McRetroTS.sh cannot be found!')
+        print('**********************************************')
+        print('')
+        print("""Please Download the AFNI package 'McRetroTS' from """)
+        print("""   http://afni.nimh.nih.gov/sscc/dglen/McRetroTS  """)
+        print("""And install it to /opt/mcretro.                   """)
+        print('')
+
+    elif os.path.isdir('/opt/MATLAB/MATLAB_Compiler_Runtime/v715') == False:
+        print('**********************************************')
+        print('MATLAB compiler runtime v715 cannot be found!')
+        print('**********************************************')
+        print('')
+        print("""Please Download the MATLAB v715 (2011b) compiler from """)
+        print("""   http://afni.nimh.nih.gov/sscc/dglen/McRetroTS      """)
+        print("""And install it to /opt/MATLAB.                        """)
+        print('')
+
+    else:
+        print('\n*********************************************')
+        print('config.py appears to be properly configured!\n')
+        print('     data directory: ' + str(dir_data))
+        print('     pipeline directory: ' + str(dir_pipe))
+        print('     AFNI directory: ' + str(dir_afni))
+        print('     McRetroTS found: /opt/mcretro')
+        print('     MATLAB found: /opt/MATLAB/MATLAB_Compiler_Runtime/v715')
+        print('*********************************************\n')
+
+def check_run(expt, subj, mode, sess, run):
+    """
+    Returns True if RUN folder contains a NIFTI file, False otherwise.
+
+    Usage:
+        truth = check_run(experiment, subject, image modality, session, run)
+    """
+
+    # retrieve settings from config.py
+    dir_data, dir_pipe, dir_afni, cores = epi.config.return_paths()
+
+    # retrieve the files within each run folder
+    dir_file = os.path.join(dir_data, expt, subj, mode, sess, run)
+    file_list = [d for d in os.listdir(dir_file)
+                         if os.path.isfile(os.path.join(dir_file, d))]
+
+    # return True if any file ends with a NIFTI extension
+    if any(f[-7:] == '.nii.gz' or f[-4] == '.nii' for f in file_list):
+        return True
+    else:
+        return False
+
+def check_mode(expt, subj, mode):
+    """
+    This returns each image modality's total number of runs and checks for run
+    folders with missing data.
+    """
+
+    # start a run counter
+    n_runs = 0
+
+    # retrieve settings from config.py
+    dir_data, dir_pipe, dir_afni, cores = epi.config.return_paths()
+
+    
+    # retrieve the sessions for a given image modality
+    dir_mode = os.path.join(dir_data, expt, subj, mode)
+    sess_list = [d for d in os.listdir(dir_mode)
+                         if os.path.isdir(os.path.join(dir_mode, d))]
+    
+    # retrieve runs for a given session
+    for sess in sess_list:
+        dir_sess = os.path.join(dir_mode, sess)
+        run_list = [d for d in os.listdir(dir_sess)
+                            if os.path.isdir(os.path.join(dir_sess, d))
+                            and d[0:3] == 'RUN']
+
+        # check for runs missing NIFTI files, print a warning if required
+        for run in run_list:
+            if check_run(expt, subj, mode, sess, run) == True:
+                n_runs = n_runs + 1
+            else:
+                print('subject ' + str(subj) +
+                      ', image modality ' + str(mode) +
+                      ', session ' + str(sess) +
+                      ', run ' + str(run) +
+                      ' contains no NIFTI file.')
+
+    return n_runs
+
+def check_directories(expt):
+    """
+    This checks the image modalities for each subject in an experiment. It also
+    reports the number of subjects with each kind of image modality.
+    """
+
+    # retrieve settings from config.py
+    dir_data, dir_pipe, dir_afni, cores = epi.config.return_paths()
+
+    # check permissions
+    if epi.utilities.has_permissions(os.path.join(dir_data, expt)) == False:
+        sys.exit()
+    
+    # attempt to access the subjects for a given experiment
+    try:
+        subjects = epi.utilities.get_subj(os.path.join(dir_data, expt))
+    except:
+        print 'Your experiment path is incorrect ' + str(expt)
+
+    # this dict will hold our count
+    mode_dict = {}
+
+    # loop through subjects, returning image modality counts, and record
+    for subj in subjects:
+        
+        # retrieve the image modalities for a given subject 
+        dir_subj = os.path.join(dir_data, expt, subj)
+        mode_list = [d for d in os.listdir(dir_subj) 
+                             if os.path.isdir(os.path.join(dir_subj, d))]
+        
+        for mode in mode_list:    
+            # check inside each modality, get the number of sessions
+            n_runs = check_mode(expt, subj, mode)
+            
+            # add them to the count
+            try:
+                mode_dict[str(mode)] = mode_dict[str(mode)] + n_runs
+            except:
+                mode_dict[str(mode)] = n_runs
+
+    # print out the file counts per image modality
+    print('\n****************************************************************')
+    for mode_key in mode_dict:
+        print str(mode_dict[mode_key]) + ' NIFTIs found in ' + str(mode_key)
+    print('****************************************************************\n')
+
+
+# The Cleanup Pipeline
+###############################################################################
+def run_cleanup():
+    print('******************************************************************')
+    print('***       RUNNING EPItome-XL CLEANUP. THIS DELETES DATA        ***')
+    print('******************************************************************')
+
+    # retrieve settings from config.py
+    dir_data, dir_pipe, dir_afni, cores = epi.config.return_paths() 
+
+    # get the experiment
+    flag = 0
+    while flag == 0:
+        expt = get_experiments(interactive=True)
+        if expt == None:
+            print('')
+        else:
+            flag = 1
+    
+    print('')
+    print('Experiment: ' + str(expt) + '. Select image modality.')
+    print('')
+ 
+    # get the mode
+    flag = 0
+    while flag == 0:
+        mode = get_mode(expt, interactive=True)
+        if mode == None:
+            print('')
+        else:
+            flag = 1
+
+    # get the date and time, current user, f_id
+    datetime, user, f_id = get_date_user()
+
+    # generate the unique filenames for this run
+    clean = 'clean_' + f_id + '.sh'
+
+    # open up the master script, write common variables
+    f = open(os.path.join(dir_data, expt, clean), 'wb')
+
+    f.write('#!/bin/bash\n')
+    f.write('\n')
+    f.write('# Cleanup script for ' + str(expt) + ': ' + str(mode) + '.\n')
+    f.write('# Generated: ' + str(datetime) + ' by ' + str(user) + '.\n')
+    f.write('\n')
+    f.write('## Setup\n')
+    f.write("""export DIR_PIPE='""" + str(dir_pipe) + """'\n""")
+    f.write("""export DIR_DATA='""" + str(dir_data) + """'\n""")
+    f.write("""export DIR_AFNI='""" + str(dir_afni) + """'\n""")
+    f.write("""export DIR_EXPT='""" + str(expt) + """'\n""")
+    f.write("""export DATA_TYPE='""" + str(mode) + """'\n""")
+    f.write('\n')
+    f.write("""export CORES=""" + str(cores) + """\n""")
+    f.write('export AFNI_DECONFLICT=OVERWRITE\n')
+
+    # get the subjects
+    print('')
+    print('Would you like to cleanup all subjects, or just some?')
+    flag = 0
+    while flag == 0:
+        output = ''
+        choice = ['all', 'some']
+        decision = epi.commands.selector_list(choice)
+
+        if decision == None:
+            print ('Invalid selection, please try again.')
+        else:
+            flag = 1
+
+    # optionally allow me to only clean up some subjects
+    if decision == 'some':
+        flag = 0
+        subjects = []
+        while flag == 0:
+            print('Please select a subject.')
+            output = ''
+            subj_list = epi.utilities.get_subj(os.path.join(dir_data, expt))
+            subj = epi.commands.selector_list(subj_list)
+
+            if output == None:
+                print('Invalid subject, please try again.')
+            else:
+                subjects.append(subj)
+
+            print('')
+            print('The following subjects are slated for cleanup:')
+            print('')
+            for subj in subjects:
+                print subj
+            print('')
+            response = raw_input("""Type 'stop' to stop, else continue: """)
+
+            if response == 'stop':
+                flag = 1
+
+    # otherwise just get the whole list
+    elif decision == 'all':
+        subjects = epi.utilities.get_subj(os.path.join(dir_data, expt))
+        print('')
+        print('The following subjects are slated for cleanup:')
+        print('')
+        for subj in subjects:
+            print subj
+        print('')
+
+    # print these subjects to the script
+    f.write('export SUBJECTS="')
+    for subj in subjects:
+        f.write(str(subj) + ' ')
+    f.write('"\n')
+
+    # close down the file (cleanup commands added via cleanup.py)
+    f.write('## Cleanup Commands \n')
+    f.write('\n')
+    f.close()
+
+    # now loop through the cleanup modules until the user aborts
+    flag = 0 # breaks us out of the loop
+    while flag == 0:
+
+        print('')
+        print('Please select the next cleanup module:')
+        print('')
+        module, used = get_modules(interactive=True, moduletype='cleanup')
+        if module == None:
+            print('')
+        else:
+            # executes the chosen module, write cleanup commands
+            command = 'epi.commands.' + str(module) + '(expt, clean)'
+            eval(command)
+        
+        # ask if we should continue
+        response = raw_input("""Type 'stop' to stop, else continue: """)
+        if response == 'stop':
+            flag = 1
+
+    # print some final remarks
+    print('******************************************************************')
+    print('The cleanup script can be manually executed via:\n' + 
+           '. ' + str(os.path.join(dir_data, expt, clean)) + '\n' +
+           'and the user must manually OK each clean-up step.')
+    print('******************************************************************')
+
+# The Actual Pipeline 
+###############################################################################
+def run_epitome():
+    print('******************************************************************')
+    print('             Running EPItome-XL. Select experiment.')
+    print('******************************************************************')
+
+    # retrieve settings from config.py
+    dir_data, dir_pipe, dir_afni, cores = epi.config.return_paths()
+
+    # make sure we have permissions to access the experiment directory.
+    if epi.utilities.has_permissions(dir_data) == False:
+        sys.exit()
+
+    # get the experiment
+    flag = 0
+    while flag == 0:
+        expt = get_experiments(interactive=True)
+        if expt == None:
+            print('')
+        else:
+            flag = 1
+
+    # now check to make sure we have experiment-specific permissions.
+    if epi.utilities.has_permissions(os.path.join(dir_data, expt)) == False:
+        sys.exit()
+
+    # input unique identifier
+    print('\nInput unique identifier for this pipeline (alphanumeric):')
+    ID = raw_input('ID: ')
+
+    # replace spaces with underscores, and remove every other special char
+    ID = ID.replace(' ', '_')
+    ID = ID.strip(",./;'[]\|-=+<>?:{}!@#$%^&*()`~")
+    ID = ID.strip('"')
+
+    print('\nYour ID: ' + str(ID))
+
+    # get the date and time, current user, f_id
+    datetime, user, f_id = get_date_user()
+    master = 'master_' + f_id + '_' + ID + '.sh'
+    cmd = 'cmd_' + f_id + '_' + ID + '.sh'
+    proc = 'proclist_' + f_id + '_' + ID + '.sh'
+
+    # create a copy of the pipeline in the user's home directory
+    print('******************************************************************')
+    print('Replicating the current pipeline in ~/EPItome-xl/' +str(ID) + '.')
+    print('******************************************************************')
+
+    # check the OS -- for paths
+    operating_system = platform.system()
+    if operating_system == 'Linux':
+        
+        # make the EPItome-xl directory if required
+        if os.path.isdir('/home/' + str(user) + '/EPItome-xl') == False:
+            os.system('mkdir /home/' + str(user) + '/EPItome-xl')
+
+        # make the unique ID folder for this module set
+        if os.path.isdir('/home/' + str(user) + '/EPItome-xl/' + 
+                                                       str(ID)) == True:
+            print('This UID already exists! Skipping replication ...')
+            pass
+        
+        # replicate the pipeline into the home folder
+        else:
+            os.system('mkdir /home/' + str(user) + '/EPItome-xl/' + str(ID))
+            os.system('cp -r ' + str(dir_pipe) + '/*' +
+                      ' /home/' + str(user) + '/EPItome-xl/' + str(ID) +'/')
+            dir_pipe = '/home/' + str(user) + '/EPItome-xl/' + str(ID) +'/'
+
+    else:
+        print("""
+              *****************************************************************
+              Sorry, your operating system isn't supported yet. At the moment,
+              EPItome-xl only work with Linux operating systems. Bug the author
+              about OSX support!
+              *****************************************************************
+              """)
+        sys.exit()
+
+    print('******************************************************************')
+    print('Experiment: ' + str(expt) + '. Select image modality.')
+    print('******************************************************************')
+
+    # get the mode
+    flag = 0
+    while flag == 0:
+        mode = get_mode(expt, interactive=True)
+        if mode == None:
+            print('')
+        else:
+            flag = 1
+
+    print('******************************************************************')
+    print('Image Modality: ' + str(mode) + '. Adding Freesurfer stages.')
+    print('******************************************************************')
+
+    # open up the master script, write common variables
+    f = open(os.path.join(dir_data, expt, master), 'wb')
+
+    f.write('#!/bin/bash\n')
+    f.write('\n')
+    f.write('# Master script for ' + str(expt) + ': ' + str(mode) + '.\n')
+    f.write('# Generated: ' + str(datetime) + ' by ' + str(user) + '.\n')
+    f.write('\n')
+    f.write('## Setup\n')
+    
+    f.write("""export DIR_PIPE='""" + str(dir_pipe) + """'\n""")
+    
+    # this should work now that we are exporting and no longer referencing
+    # the master pipeline --!
+    #f.write("""export DIR_PIPE='~/EPItome-xl/""" + str(ID) + """'\n""")
+    
+    f.write("""export DIR_DATA='""" + str(dir_data) + """'\n""")
+    f.write("""export DIR_AFNI='""" + str(dir_afni) + """'\n""")
+    f.write("""export DIR_EXPT='""" + str(expt) + """'\n""")
+    f.write("""export DATA_TYPE='""" + str(mode) + """'\n""")
+    f.write("""export ID='""" + str(ID) + """'\n""")
+    f.write('\n')
+    f.write("""export CORES=""" + str(cores) + """\n""")
+    f.write('export AFNI_DECONFLICT=OVERWRITE\n')
+    f.write('export SUBJECTS=`python ${DIR_PIPE}/epitome/utilities.py ' + 
+            '${DIR_DATA} ${DIR_EXPT}`\n')
+    f.write('\n')
+
+    # add in the freesurfer calls (recon + export -- currently mandatory)
+    f.write('## Freesurfer\n')
+
+    # NB: We reset the proclist here
+    #f.close()
+
+    fs  = ('python ' + 
+           os.path.join(dir_pipe, 'epitome/modules/freesurfer/fsrecon.py') +
+           ' ' + str(dir_data) + 
+           ' ' + str(expt) + 
+           ' ' + str(mode) + 
+           ' ' + os.path.join(dir_data, expt, str(proc)))
+    f.write(fs + '\n')
+    
+    #f.write('echo python ${DIR_PIPE}/epitome/modules/freesurfer/fsrecon.py ' +
+    #        '${DIR_DATA} ${DIR_EXPT} ${DATA_TYPE} ${CORES} ' +
+    #        '> ${DIR_DATA}/${DIR_EXPT}/' + proc + '\n')
+    
+    # re-open the file to continue
+    #f = open(os.path.join(dir_data, expt, master), 'wb')
+    f.write('echo python ${DIR_PIPE}/epitome/modules/freesurfer/fsexport.py ' +
+            '${DIR_DATA} ${DIR_EXPT} ' + 
+            '>> ${DIR_DATA}/${DIR_EXPT}/' + proc + '\n')
+    f.write('\n')
+
+    # begin looping through subjects
+    f.write('## Begin Pipeline\n')
+    f.write('for SUB in ${SUBJECTS}; do\n')
+    f.write('\n')
+    
+    # export all variables to each subject's individual script
+    f.write('cat > ${DIR_DATA}/${DIR_EXPT}/${SUB}/' + cmd + ' << EOF\n')
+    f.write('export DIR_PIPE=${DIR_PIPE}\n')
+    f.write('export DIR_DATA=${DIR_DATA}\n')
+    f.write('export DIR_AFNI=${DIR_AFNI}\n')
+    f.write('export DIR_EXPT=${DIR_EXPT}\n')
+    f.write('export DATA_TYPE=${DATA_TYPE}\n')
+    f.write('export ID=${ID}\n')
+    f.write('export SUB=${SUB}\n')
+    f.write("""McRetroTS='/opt/mcretro/run_McRetroTS.sh """ +
+            """/opt/MATLAB/MATLAB_Compiler_Runtime/v715'\n""")
+    f.write('EOF\n')
+    f.write('\n')
+
+    # we always start the pipeline with init_EPI
+    print('******************************************************************')
+    print('                Beginning pipeline construction!')
+    print('******************************************************************')
+
+    pipe_list = [] # keeps track of our command-list
+    flag = 0 # breaks us out of the loop
+    while flag == 0:    
+        
+        # add init_EPI, check for mistakes, break the loop if flawless
+        line, output = epi.commands.init_EPI()
+        pipe_list, output = writer_sub(pipe_list, 
+                                       line, cmd, f, output, None)
+        if output != None:
+            used = ['init_EPI'] # start the 'used module' list
+            flag = 1 # breaks us out of the loop
+ 
+    # now loop through the modules until the user aborts
+    flag = 0 # breaks us out of the loop
+    while flag == 0:
+
+        print('\nPlease select the next pipeline module:\n')
+        module, used = get_modules(interactive=True, 
+                                    moduletype='pre',
+                                          used=used)
+
+        if module == None:
+            print('')
+        else:
+            # save the old output
+            bkup = copy.copy(output)
+
+            # executes the chosen module, write pipeline commands
+            command = 'epi.commands.' + str(module) + '(output)'
+            line, output = eval(command)
+
+            # if module call was unsuccessful, don't count as used.
+            if output == None:
+                used.pop()
+            
+            # write line in script if successful
+            pipe_list, output = writer_sub(pipe_list, 
+                                           line, cmd, f, output, bkup)
+
+        # print the current pipeline configuration, ask to continue
+        print('\nCurrent pre-processing pipeline:')
+        for pipe in pipe_list:
+            print('    ' + str(pipe))
+        print('')
+        response = raw_input("""Type 'stop' to stop, else continue: """)
+        # breaks us out of the pipeline constructor loop
+        if response == 'stop':
+            flag = 1
+
+    # add each subject to a queue file, close the subject loop
+    f.write('\nchmod 750 ${DIR_DATA}/${DIR_EXPT}/${SUB}/' + cmd)
+    f.write('\n# append this subject to the process queue')
+    f.write('\necho bash ${DIR_DATA}/${DIR_EXPT}/${SUB}/' + cmd +
+                           ' >> ${DIR_DATA}/${DIR_EXPT}/' + proc)
+    f.write('\ndone')
+ 
+    # add user-defined qc runs
+    f.write('\n# calls to QC programs\n')
+    
+    pipe_list = [] # keeps track of our command-list
+    flag = 0 # breaks us out of the loop
+    used = []
+    while flag == 0:
+
+        print('\nPlease select the next QC module:')
+        module, used = get_modules(interactive=True, moduletype='qc', 
+                                                           used=used)
+        if module == None:
+            print('')
+        else:
+            # save the old output
+            bkup = copy.copy(output)
+             
+            # executes the chosen module, write pipeline commands
+            command = 'epi.commands.' + str(module) + '(dir_data, expt, mode)'
+            line, output = eval(command)
+            pipe_list, output = writer_exp(pipe_list, 
+                                           line, proc, f, output, bkup)
+
+        # print the current pipeline configuration, ask to continue
+        print('\nThe QC pipeline currently looks like this:')
+        for pipe in pipe_list:
+            print pipe
+        print('')
+        response = raw_input("""Type 'stop' to stop, else continue: """)
+        # breaks us out of the pipeline constructor loop
+        if response == 'stop':
+            flag = 1
+
+    print('\nSaving master script & generating subject-specific scripts.')
+    # close the file, make executable by owner + group, and execute
+    f.write('\n')
+    f.close()
+    os.chmod(os.path.join(dir_data, expt, master), 0750)
+    os.system('bash ' + os.path.join(dir_data, expt, master))
+
+    # print some final remarks
+    print('******************************************************************')
+    print('The pipeline can be manually executed via:\n' + 
+           '. ' + str(os.path.join(dir_data, expt, proc)) + '\n' +
+           'or submitted to the queue via:\n' +
+           'EPIqueue ' + str(os.path.join(dir_data, expt, proc)))
+    print('******************************************************************')
+
+# this is the command-line usage bit
+if __name__ == "__main__":
+    
+    # listing available modules and associated help
+    if len(sys.argv) == 2 and sys.argv[1] == 'modules':
+        help_query()
+    
+    elif len(sys.argv) == 2 and sys.argv[1] == 'experiments':
+        get_experiments()
+    
+    # checking functions
+    elif len(sys.argv) == 2 and sys.argv[1] == 'check':
+        check_paths()
+    
+    elif len(sys.argv) == 3 and sys.argv[1] == 'check':
+        check_directories(sys.argv[2]) 
+    
+    elif len(sys.argv) > 3 and sys.argv[1] == 'check':
+        print 'EPItome check only works with 1 experiment at a time!'
+
+    elif len(sys.argv) == 2 and sys.argv[1] == 'clean':
+        run_cleanup()
+
+    # for running the command-line interface
+    elif len(sys.argv) == 2 and sys.argv[1] == 'run':
+        run_epitome()
+
+    # return the usage if the user does a silly thing
+    else:
+        print __doc__
